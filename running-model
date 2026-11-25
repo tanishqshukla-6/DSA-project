@@ -1,0 +1,395 @@
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Scanner;
+
+/*
+ * PS 51 - Smart Student Record System
+ * Language : Java (single .java file, run from the console)
+ * Concepts : ArrayList, HashMap, Searching, Sorting, Methods, File Handling
+ *
+ * How to run:
+ *   javac StudentRecordSystem.java
+ *   java StudentRecordSystem
+ *
+ * Data is stored in students.txt (one student per line):
+ *   ID,Name,TotalMarks,ExamCount   e.g. STU101,Rahul Sharma,170,2
+ */
+
+// ---------------------------------------------------------------------------
+// StudentRecordSystem : menu (main class)
+// ---------------------------------------------------------------------------
+public class StudentRecordSystem {
+
+    private static final Scanner sc = new Scanner(System.in);
+    private static final RecordManager manager = new RecordManager();
+
+    public static void main(String[] args) {
+        manager.loadFromFile();
+        boolean running = true;
+        while (running) {
+            showMenu();
+            String line = readLine("Enter choice: ");
+            if (line == null) {          // input ended (for example Ctrl+D) -> save and quit
+                break;
+            }
+            switch (readChoice(line)) {
+                case 1: addStudent(); break;
+                case 2: addMarks(); break;
+                case 3: searchStudent(); break;
+                case 4: manager.generateReport(); break;
+                case 5: running = false; break;
+                default:
+                    System.out.println("Invalid choice. Enter a number from 1 to 5.");
+            }
+        }
+        manager.saveToFile();
+        System.out.println("Data saved to students.txt. Goodbye!");
+    }
+
+    private static void showMenu() {
+        System.out.println();
+        System.out.println("========== SMART STUDENT RECORD SYSTEM ==========");
+        System.out.println("1. Add Student");
+        System.out.println("2. Add Marks (0-100)");
+        System.out.println("3. Search Student");
+        System.out.println("4. Student Report");
+        System.out.println("5. Exit");
+    }
+
+    private static int readChoice(String line) {
+        try {
+            return Integer.parseInt(line.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    // prints a prompt and returns the typed line (null if there is no more input)
+    private static String readLine(String prompt) {
+        System.out.print(prompt);
+        if (!sc.hasNextLine()) {
+            System.out.println();
+            return null;
+        }
+        return sc.nextLine();
+    }
+
+    // ---------------- menu actions ----------------
+
+    private static void addStudent() {
+        String name = readLine("Enter student name: ");
+        if (name == null) return;
+        name = name.trim();
+        if (name.isEmpty()) {
+            System.out.println("Name cannot be empty.");
+            return;
+        }
+        if (name.contains(",")) {
+            System.out.println("Name cannot contain a comma.");
+            return;
+        }
+        Student s = manager.addStudent(name);
+        System.out.println("Student added. " + manager.counts(s));
+    }
+
+    private static void addMarks() {
+        String id = readLine("Enter student ID: ");
+        if (id == null) return;
+        String text = readLine("Enter marks (0-100): ");
+        if (text == null) return;
+        int marks;
+        try {
+            marks = Integer.parseInt(text.trim());
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid marks. Enter a number from 0 to 100.");
+            return;
+        }
+        if (marks < 0 || marks > 100) {
+            System.out.println("Invalid marks. Enter a number from 0 to 100.");
+            return;
+        }
+        Student s = manager.addMarks(id, marks);
+        if (s == null) {
+            System.out.println("Student not found.");
+        } else {
+            System.out.println("Marks added. " + manager.counts(s));
+        }
+    }
+
+    private static void searchStudent() {
+        String key = readLine("Enter student ID or name: ");
+        if (key == null) return;
+        if (key.trim().isEmpty()) {
+            System.out.println("Please enter an ID or a name.");
+            return;
+        }
+        Student s = manager.search(key);
+        if (s == null) {
+            System.out.println("Student not found.");
+        } else {
+            System.out.println("Found: " + manager.describe(s));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Student : one student record
+// ---------------------------------------------------------------------------
+class Student {
+    private final String id;
+    private final String name;
+    private int totalMarks;
+    private int examCount;
+
+    Student(String id, String name, int totalMarks, int examCount) {
+        this.id = id;
+        this.name = name;
+        this.totalMarks = totalMarks;
+        this.examCount = examCount;
+    }
+
+    String getId() { return id; }
+    String getName() { return name; }
+    int getTotalMarks() { return totalMarks; }
+    int getExamCount() { return examCount; }
+
+    void addMarks(int marks) {
+        totalMarks += marks;
+        examCount++;
+    }
+
+    boolean hasMarks() {
+        return examCount > 0;
+    }
+
+    // percentage = total marks / (exams x 100) x 100
+    double getPercentage() {
+        if (!hasMarks()) {
+            return 0.0;
+        }
+        return (totalMarks * 100.0) / (examCount * 100);
+    }
+
+    String formatPercentage() {
+        return String.format(Locale.US, "%.2f%%", getPercentage());
+    }
+
+    String getGrade() {
+        double p = getPercentage();
+        if (p >= 90) return "A";
+        if (p >= 75) return "B";
+        if (p >= 60) return "C";
+        if (p >= 40) return "D";
+        return "F";
+    }
+
+    // line stored in students.txt
+    String toFileString() {
+        return id + "," + name + "," + totalMarks + "," + examCount;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RecordManager : ArrayList + HashMap + file handling + searching/sorting
+// ---------------------------------------------------------------------------
+class RecordManager {
+
+    private static final String FILE_NAME = "students.txt";
+    private static final int FIRST_ID = 101;
+    // true  -> report is sorted by percentage (highest first) with our own sort
+    // false -> report is printed in ID (insertion) order
+    private static final boolean SORT_REPORT = true;
+
+    private final ArrayList<Student> studentList = new ArrayList<>();
+    private final HashMap<String, Student> studentMap = new HashMap<>();
+    private int nextId = FIRST_ID;
+
+    // ---------------- file handling ----------------
+
+    // Load data from the file at start. A missing file just means "no data yet".
+    void loadFromFile() {
+        File file = new File(FILE_NAME);
+        if (!file.exists()) {
+            return;
+        }
+        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                String[] parts = line.split(",");
+                if (parts.length != 4) {
+                    continue;                      // skip a damaged line
+                }
+                try {
+                    String id = parts[0].trim().toUpperCase();
+                    String name = parts[1].trim();
+                    int total = Integer.parseInt(parts[2].trim());
+                    int count = Integer.parseInt(parts[3].trim());
+                    if (!id.startsWith("STU") || studentMap.containsKey(id)
+                            || total < 0 || count < 0 || total > count * 100) {
+                        continue;
+                    }
+                    Student s = new Student(id, name, total, count);
+                    studentList.add(s);
+                    studentMap.put(id, s);
+                    int number = Integer.parseInt(id.substring(3));
+                    if (number >= nextId) {
+                        nextId = number + 1;
+                    }
+                } catch (NumberFormatException ex) {
+                    // skip a line with bad numbers
+                }
+            }
+        } catch (IOException ex) {
+            System.out.println("Could not read " + FILE_NAME + ": " + ex.getMessage());
+        }
+    }
+
+    // Save every student to the file (called on exit).
+    void saveToFile() {
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(FILE_NAME))) {
+            for (int i = 0; i < studentList.size(); i++) {
+                bw.write(studentList.get(i).toFileString());
+                bw.newLine();
+            }
+        } catch (IOException ex) {
+            System.out.println("Could not save " + FILE_NAME + ": " + ex.getMessage());
+        }
+    }
+
+    // ---------------- features ----------------
+
+    // 1 - Add Student
+    Student addStudent(String name) {
+        String id = "STU" + nextId;
+        nextId++;
+        Student s = new Student(id, name, 0, 0);
+        studentList.add(s);          // ArrayList keeps the order
+        studentMap.put(id, s);       // HashMap gives quick lookup by ID
+        return s;
+    }
+
+    // 2 - Add Marks. Returns the student, or null if the ID does not exist.
+    // The caller must already have checked that marks are from 0 to 100.
+    Student addMarks(String id, int marks) {
+        Student s = searchById(id);
+        if (s == null) {
+            return null;
+        }
+        s.addMarks(marks);
+        return s;
+    }
+
+    // 3a - Search by ID : HashMap lookup, O(1) on average
+    Student searchById(String id) {
+        return studentMap.get(id.trim().toUpperCase());
+    }
+
+    // 3b - Search by name : our own linear search over the list, O(n)
+    Student searchByName(String name) {
+        String key = name.trim().toLowerCase();
+        for (int i = 0; i < studentList.size(); i++) {
+            Student s = studentList.get(i);
+            if (s.getName().toLowerCase().equals(key)) {
+                return s;
+            }
+        }
+        // no exact match: try part of a name (for example "rahul")
+        for (int i = 0; i < studentList.size(); i++) {
+            Student s = studentList.get(i);
+            if (s.getName().toLowerCase().contains(key)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    // Search by ID first, otherwise by name
+    Student search(String key) {
+        Student s = searchById(key);
+        if (s == null) {
+            s = searchByName(key);
+        }
+        return s;
+    }
+
+    // 4 - Student Report
+    void generateReport() {
+        if (studentList.isEmpty()) {
+            System.out.println("No students added yet.");
+            return;
+        }
+        // work on a copy so the original (ID) order in the file never changes
+        ArrayList<Student> view = new ArrayList<>(studentList);
+        if (SORT_REPORT) {
+            sortByPercentage(view);
+        }
+        System.out.println("---------------- STUDENT REPORT ----------------");
+        for (int i = 0; i < view.size(); i++) {
+            System.out.println(describe(view.get(i)));
+        }
+        System.out.println("------------------------------------------------");
+    }
+
+    // ---------------- helpers ----------------
+
+    // Own selection sort (no Collections.sort / Arrays.sort):
+    // highest percentage first, students with no marks last, ties keep ID order.
+    private void sortByPercentage(ArrayList<Student> list) {
+        for (int i = 0; i < list.size() - 1; i++) {
+            int best = i;
+            for (int j = i + 1; j < list.size(); j++) {
+                if (comesBefore(list.get(j), list.get(best))) {
+                    best = j;
+                }
+            }
+            if (best != i) {
+                Student temp = list.get(i);
+                list.set(i, list.get(best));
+                list.set(best, temp);
+            }
+        }
+    }
+
+    // true if a should be listed before b
+    private boolean comesBefore(Student a, Student b) {
+        if (a.hasMarks() != b.hasMarks()) {
+            return a.hasMarks();                    // records first, "no marks" last
+        }
+        if (a.getPercentage() != b.getPercentage()) {
+            return a.getPercentage() > b.getPercentage();
+        }
+        return idNumber(a) < idNumber(b);           // equal -> lower ID first
+    }
+
+    private int idNumber(Student s) {
+        return Integer.parseInt(s.getId().substring(3));
+    }
+
+    // One-line description used by Report and Search
+    String describe(Student s) {
+        if (!s.hasMarks()) {
+            return s.getId() + " | " + s.getName() + " | No marks recorded";
+        }
+        return s.getId() + " | " + s.getName()
+                + " | Exams: " + s.getExamCount()
+                + " | Total: " + s.getTotalMarks()
+                + " | Percentage: " + s.formatPercentage()
+                + " | Grade: " + s.getGrade();
+    }
+
+    String counts(Student s) {
+        return s.getId() + " | " + s.getName()
+                + " | Exams: " + s.getExamCount() + " | Total: " + s.getTotalMarks();
+    }
+}
